@@ -27,6 +27,14 @@ spec:
     value: .
   - name: revision
     value: '{{revision}}'
+  - name: crda-scan-image
+    value: quay.io/lrangine/crda-maven:3.0
+  - name: manifest-file-path
+    value: pom.xml
+  - name: output-file-path
+    value: redhat-codeready-dependency-analysis-report.json
+  - name: pkg-installation-directory-path
+    value: application-package  	
   pipelineSpec:
     finally:
     - name: show-sbom
@@ -145,6 +153,61 @@ spec:
         workspace: workspace
       - name: basic-auth
         workspace: git-auth
+    - name: clair-scan
+      description: CRDA tool Scans for static code vulneribilities.
+      taskSpec:
+        results:
+        - name: CLAIR_SCAN_RESULT
+          description: CRDA scan result
+        - name: HACBS_TEST_OUTPUT
+          description: CRDA scan test output
+        workspaces:
+          - name: source
+        steps:
+          - name: run-redhat-clair-crda-scan-step
+            image: quay.io/lrangine/crda-maven:11.0
+            workingDir: "$(workspaces.source.path)"
+            env:
+              - name: AUTH_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: crda-scan-secrets
+                    key: AUTH_TOKEN
+              - name: CONSENT_TELEMETRY
+                value: "false"
+              - name: CRDA_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: crda-scan-secrets
+                    key: CRDA_KEY
+              - name: HOST
+                valueFrom:
+                  secretKeyRef:
+                    name: crda-scan-secrets
+                    key: HOST
+            script: |
+              #!/usr/bin/env bash
+              /crda.sh pom.xml crda_scan_output.json
+              echo 'CRDA Scan is completed'
+              echo 'Printing scan results'
+              more crda_scan_output.json
+              echo 'Formatting the Task Results'
+              jq -rce \
+              '{vulnerabilities:{
+              critical: (.report."critical_vulnerabilities"),
+              high: (.report."high_vulnerabilities"),
+              medium: (.report."medium_vulnerabilities"),
+              low: (.report."low_vulnerabilities")
+              }}' crda_scan_output.json | tee $(results.CLAIR_SCAN_RESULT.path)
+
+              NOTE="Task $(context.task.name) completed: Refer to Tekton task result CLAIR_SCAN_RESULT for vulnerabilities scanned by CRDA."
+              HACBS_TEST_OUTPUT="SUCCESS $NOTE"
+              echo "${HACBS_TEST_OUTPUT}" | tee $(results.HACBS_TEST_OUTPUT.path)
+      runAfter:
+        - clone-repository
+      workspaces:
+      - name: source
+        workspace: workspace
     - name: prefetch-dependencies
       params:
       - name: input
